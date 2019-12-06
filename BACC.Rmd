@@ -1,0 +1,140 @@
+---
+title: "Bayesian and Frequentist intervels for Balanced Accuracy"
+author: "Ning Li"
+date: "2019/8/8"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{python}
+import numpy as np
+from scipy.stats import beta
+from scipy.integrate import trapz
+from scipy.optimize import brentq
+from pandas import DataFrame
+from sklearn import metrics
+
+
+# 1. Extract the beta parameters from a confusion matrix
+def get_beta_parameters(confusion):
+
+    alphas, betas = [], []
+    k = len(confusion)
+    
+    for i in range(k):
+        alphas.append(1 + confusion[i, i])
+        betas.append(1 + confusion.sum(axis=1)[i] - confusion[i, i])
+        
+    return list(zip(alphas, betas))
+    
+ 
+# 2. Convolve beta distribution
+def convolve_betas(parameters, res=0.001):
+   
+    k = len(parameters)
+    x = np.arange(0, k+res, res)
+    pdfs = []
+    
+    for par in parameters:
+        pdfs.append(beta.pdf(x, par[0], par[1]))
+    convolution = pdfs[0]
+    
+    for i in range(1, k):
+        convolution = np.convolve(convolution, pdfs[i])
+
+    convolution = convolution[0:len(x)]
+    convolution = convolution / (sum(convolution) * res)
+    
+    return convolution
+ 
+  
+# 3. Compute the expected value of the posterior balanced accuracy 
+def balanced_accuracy_expected(confusion):
+    
+    k = len(confusion)
+    parameters = get_beta_parameters(confusion)
+    res = 0.001
+    x = np.arange(0, k + res, res)
+    bal_accuracy = convolve_betas(parameters, res)
+    bal_accuracy_expected = (1/k) * np.dot(x, bal_accuracy * res)
+    
+    return bal_accuracy_expected
+    
+ 
+# 4. Compute the pdf of the sum of k beta distribution   
+def beta_sum_pdf(x, parameters, res=0.001):
+    convolution = convolve_betas(parameters, res)
+    x = np.array(x)
+    y = np.array([np.nan] * len(x))
+    k = len(parameters)
+    y[(x < 0) | (x > k)] = 0
+    c_index = np.int_(x / res)
+    y[np.isnan(y)] = convolution[c_index[np.isnan(y)]]
+    
+    return y
+ 
+    
+# 5. Compute the pdf of the average of the k beta distribution
+def beta_avg_pdf(x, parameters, res=0.001):
+    
+    k = len(parameters)
+    y = beta_sum_pdf(k * np.array(x), parameters, res)
+    y = y * k
+    
+    return y
+      
+
+
+# 6. Compute the cdf of the sum of the k beta distribution
+def beta_sum_cdf(x, parameters, res=0.001):
+    
+    convolution = convolve_betas(parameters, res)
+    
+    y = np.array([np.nan] * len(x))
+    for i in range(len(x)):
+        c_index = int(round(x[i] / res))
+        if c_index <= 0:
+            y[i] = 0
+        elif c_index >= len(convolution):
+            y[i] = 1
+        else:
+            y[i] = trapz(convolution[:c_index+1], dx=res)
+    
+    return y
+
+
+# 7. Compute the cdf of the average of the k beta distribution
+def beta_avg_cdf(x, parameters, res=0.001):
+    x = np.array(x)
+    k = len(parameters)
+    y = beta_sum_cdf(k * x, parameters, res)
+    
+    return y
+    
+# 8. Compute the inverse cdf of the average of the k beta distribution
+def beta_avg_inv_cdf(y, parameters, res=0.001):
+    
+    return brentq(lambda x: beta_avg_cdf([x], parameters, res)[0] - y, 0, 1)
+
+
+# 9. Compute the bayesian credible interval
+def bacc_ppdi(confusion, alpha):
+    
+    AB = get_beta_parameters(confusion)
+    b_lower = beta_avg_inv_cdf(alpha/2,AB)
+    b_upper = beta_avg_inv_cdf(1-alpha/2,AB)
+    
+    return (b_lower, b_upper)
+    
+    
+A = np.array([[80, 40], [80, 80]])
+balanced_accuracy_expected(A)
+bacc_ppdi(A, 0.05)
+
+```
